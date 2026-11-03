@@ -1,0 +1,19 @@
+{
+  "listen": "127.0.0.1:8080",
+  "data_dir": "data",
+  "database_path": null,
+  "workflow_dir": "workflows",
+  "mock_slurm": true,
+  "poll_seconds": 2,
+  "command_timeout_seconds": 15,
+  "command_concurrency": 8,
+  "rate_per_key": 200,
+  "burst_per_key": 400,
+  "global_rate": 1000,
+  "global_burst": 2000,
+  "max_upload_bytes": 67108864,
+  "api_keys": [],
+  "clusters": [{"id":"local","name":"Local Slurm","partitions":["cpu"]}],
+  "applications": [{"id":"genomics","name":"Genomics pipelines","cluster_id":"local","partitions":["cpu"]}],
+  "upstreams": []
+}

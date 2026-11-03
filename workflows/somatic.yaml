@@ -1,0 +1,92 @@
+id: somatic
+name: Somatic variant calling
+version: 1.0.0
+application: genomics
+description: Matched tumor-normal paired FASTQ through alignment, duplicate marking, BQSR, Mutect2, orientation-bias modeling and FilterMutectCalls. No clinical accuracy claim is made.
+image: /opt/hpc/images/genomics-1.0.0.sif
+references:
+  fasta: /opt/hpc/references/GRCh38/genome.fa
+  fasta_index: /opt/hpc/references/GRCh38/genome.fa.fai
+  fasta_dict: /opt/hpc/references/GRCh38/genome.dict
+  bwa_amb: /opt/hpc/references/GRCh38/genome.fa.amb
+  bwa_ann: /opt/hpc/references/GRCh38/genome.fa.ann
+  bwa_bwt: /opt/hpc/references/GRCh38/genome.fa.bwt
+  bwa_pac: /opt/hpc/references/GRCh38/genome.fa.pac
+  bwa_sa: /opt/hpc/references/GRCh38/genome.fa.sa
+  known_sites: /opt/hpc/references/GRCh38/dbsnp.vcf.gz
+  known_sites_index: /opt/hpc/references/GRCh38/dbsnp.vcf.gz.tbi
+  germline_resource: /opt/hpc/references/GRCh38/gnomad.af-only.vcf.gz
+  germline_resource_index: /opt/hpc/references/GRCh38/gnomad.af-only.vcf.gz.tbi
+inputs:
+  tumor_r1: {kind: fastq, required: true, description: Tumor paired-end read 1}
+  tumor_r2: {kind: fastq, required: true, description: Tumor paired-end read 2}
+  normal_r1: {kind: fastq, required: true, description: Matched normal paired-end read 1}
+  normal_r2: {kind: fastq, required: true, description: Matched normal paired-end read 2}
+parameters:
+  tumor_sample: {type: string, default: TUMOR001, format: sample_id}
+  normal_sample: {type: string, default: NORMAL001, format: sample_id}
+  threads: {type: integer, default: 4, minimum: 1, maximum: 64}
+  memory_gb: {type: integer, default: 8, minimum: 4, maximum: 512}
+  time_minutes: {type: integer, default: 240, minimum: 1, maximum: 10080}
+resources: {cpus: 4, memory_gb: 8, time_minutes: 240}
+steps:
+  - id: align_tumor
+    command: >-
+      bwa mem -t {{param:threads}}
+      -R '@RG\tID:'{{param:tumor_sample}}'\tSM:'{{param:tumor_sample}}'\tPL:ILLUMINA'
+      {{reference:fasta}} {{input:tumor_r1}} {{input:tumor_r2}}
+      | samtools sort -@ {{param:threads}} -m 256M -o {{run_dir}}/tumor.aligned.bam -
+  - id: align_normal
+    command: >-
+      bwa mem -t {{param:threads}}
+      -R '@RG\tID:'{{param:normal_sample}}'\tSM:'{{param:normal_sample}}'\tPL:ILLUMINA'
+      {{reference:fasta}} {{input:normal_r1}} {{input:normal_r2}}
+      | samtools sort -@ {{param:threads}} -m 256M -o {{run_dir}}/normal.aligned.bam -
+  - id: mark_tumor_duplicates
+    command: >-
+      gatk --java-options '-Xmx2g' MarkDuplicates
+      -I {{run_dir}}/tumor.aligned.bam -O {{run_dir}}/tumor.dedup.bam
+      -M {{run_dir}}/tumor.duplicate_metrics.txt --CREATE_INDEX true
+  - id: mark_normal_duplicates
+    command: >-
+      gatk --java-options '-Xmx2g' MarkDuplicates
+      -I {{run_dir}}/normal.aligned.bam -O {{run_dir}}/normal.dedup.bam
+      -M {{run_dir}}/normal.duplicate_metrics.txt --CREATE_INDEX true
+  - id: recalibrate_tumor
+    command: >-
+      gatk --java-options '-Xmx2g' BaseRecalibrator -R {{reference:fasta}}
+      -I {{run_dir}}/tumor.dedup.bam --known-sites {{reference:known_sites}}
+      -O {{run_dir}}/tumor.recalibration.table
+  - id: recalibrate_normal
+    command: >-
+      gatk --java-options '-Xmx2g' BaseRecalibrator -R {{reference:fasta}}
+      -I {{run_dir}}/normal.dedup.bam --known-sites {{reference:known_sites}}
+      -O {{run_dir}}/normal.recalibration.table
+  - id: apply_tumor_recalibration
+    command: >-
+      gatk --java-options '-Xmx2g' ApplyBQSR -R {{reference:fasta}}
+      -I {{run_dir}}/tumor.dedup.bam --bqsr-recal-file {{run_dir}}/tumor.recalibration.table
+      -O {{run_dir}}/tumor.recalibrated.bam
+  - id: apply_normal_recalibration
+    command: >-
+      gatk --java-options '-Xmx2g' ApplyBQSR -R {{reference:fasta}}
+      -I {{run_dir}}/normal.dedup.bam --bqsr-recal-file {{run_dir}}/normal.recalibration.table
+      -O {{run_dir}}/normal.recalibrated.bam
+  - id: mutect2
+    command: >-
+      gatk --java-options '-Xmx2g' Mutect2 -R {{reference:fasta}}
+      -I {{run_dir}}/tumor.recalibrated.bam -I {{run_dir}}/normal.recalibrated.bam
+      --normal-sample {{param:normal_sample}} --germline-resource {{reference:germline_resource}}
+      --native-pair-hmm-threads {{param:threads}}
+      --f1r2-tar-gz {{run_dir}}/f1r2.tar.gz -O {{run_dir}}/unfiltered.vcf
+  - id: learn_orientation_bias
+    command: >-
+      gatk --java-options '-Xmx2g' LearnReadOrientationModel -I {{run_dir}}/f1r2.tar.gz
+      -O {{run_dir}}/orientation-model.tar.gz
+  - id: filter_mutect_calls
+    command: >-
+      gatk --java-options '-Xmx2g' FilterMutectCalls -R {{reference:fasta}}
+      -V {{run_dir}}/unfiltered.vcf --stats {{run_dir}}/unfiltered.vcf.stats
+      --orientation-bias-artifact-priors {{run_dir}}/orientation-model.tar.gz -O {{output:variants}}
+outputs:
+  variants: {path: results/somatic.filtered.vcf, kind: vcf, required: true}

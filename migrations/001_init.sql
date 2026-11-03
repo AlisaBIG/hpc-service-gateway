@@ -1,0 +1,12 @@
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, owner TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS jobs_owner ON jobs(owner);
+CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, owner TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS runs_owner ON runs(owner);
+CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, owner TEXT NOT NULL, data TEXT NOT NULL CHECK(json_valid(data)), updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS files_owner ON files(owner);
+CREATE TABLE IF NOT EXISTS workflow_versions (id TEXT NOT NULL, version TEXT NOT NULL, yaml TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(id, version));
+CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, status INTEGER NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS audit_created ON audit_logs(created_at);
+CREATE TABLE IF NOT EXISTS app_bindings (application_id TEXT PRIMARY KEY, cluster_id TEXT NOT NULL);

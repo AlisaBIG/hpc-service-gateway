@@ -1,0 +1,64 @@
+id: germline
+name: Germline variant calling
+version: 1.0.0
+application: genomics
+description: Paired FASTQ through alignment, duplicate marking, BQSR, haplotype calling and basic quality filtering. GRCh38 references and a pinned tool image are provisioned by the administrator.
+image: /opt/hpc/images/genomics-1.0.0.sif
+references:
+  fasta: /opt/hpc/references/GRCh38/genome.fa
+  fasta_index: /opt/hpc/references/GRCh38/genome.fa.fai
+  fasta_dict: /opt/hpc/references/GRCh38/genome.dict
+  bwa_amb: /opt/hpc/references/GRCh38/genome.fa.amb
+  bwa_ann: /opt/hpc/references/GRCh38/genome.fa.ann
+  bwa_bwt: /opt/hpc/references/GRCh38/genome.fa.bwt
+  bwa_pac: /opt/hpc/references/GRCh38/genome.fa.pac
+  bwa_sa: /opt/hpc/references/GRCh38/genome.fa.sa
+  known_sites: /opt/hpc/references/GRCh38/dbsnp.vcf.gz
+  known_sites_index: /opt/hpc/references/GRCh38/dbsnp.vcf.gz.tbi
+inputs:
+  reads_r1: {kind: fastq, required: true, description: "Paired-end sample read 1, FASTQ or FASTQ.gz"}
+  reads_r2: {kind: fastq, required: true, description: "Paired-end sample read 2, FASTQ or FASTQ.gz"}
+parameters:
+  sample_id:
+    type: string
+    default: SAMPLE001
+    format: sample_id
+    description: Read group and VCF sample identifier
+  threads: {type: integer, default: 4, minimum: 1, maximum: 64}
+  memory_gb: {type: integer, default: 8, minimum: 4, maximum: 512}
+  time_minutes: {type: integer, default: 120, minimum: 1, maximum: 10080}
+resources: {cpus: 4, memory_gb: 8, time_minutes: 120}
+steps:
+  - id: align_and_sort
+    command: >-
+      bwa mem -t {{param:threads}}
+      -R '@RG\tID:'{{param:sample_id}}'\tSM:'{{param:sample_id}}'\tPL:ILLUMINA'
+      {{reference:fasta}} {{input:reads_r1}} {{input:reads_r2}}
+      | samtools sort -@ {{param:threads}} -m 256M -o {{run_dir}}/aligned.bam -
+  - id: mark_duplicates
+    command: >-
+      gatk --java-options '-Xmx2g' MarkDuplicates
+      -I {{run_dir}}/aligned.bam -O {{run_dir}}/dedup.bam
+      -M {{run_dir}}/duplicate_metrics.txt --CREATE_INDEX true
+  - id: base_recalibration
+    command: >-
+      gatk --java-options '-Xmx2g' BaseRecalibrator
+      -R {{reference:fasta}} -I {{run_dir}}/dedup.bam
+      --known-sites {{reference:known_sites}} -O {{run_dir}}/recalibration.table
+  - id: apply_recalibration
+    command: >-
+      gatk --java-options '-Xmx2g' ApplyBQSR -R {{reference:fasta}}
+      -I {{run_dir}}/dedup.bam --bqsr-recal-file {{run_dir}}/recalibration.table
+      -O {{run_dir}}/recalibrated.bam
+  - id: haplotype_caller
+    command: >-
+      gatk --java-options '-Xmx2g' HaplotypeCaller -R {{reference:fasta}}
+      -I {{run_dir}}/recalibrated.bam --native-pair-hmm-threads {{param:threads}}
+      -O {{run_dir}}/raw.vcf
+  - id: variant_quality_filter
+    command: >-
+      gatk --java-options '-Xmx2g' VariantFiltration -R {{reference:fasta}}
+      -V {{run_dir}}/raw.vcf --filter-name LowQual --filter-expression 'QUAL < 30.0'
+      -O {{output:variants}}
+outputs:
+  variants: {path: results/germline.filtered.vcf, kind: vcf, required: true}
